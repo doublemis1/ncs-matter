@@ -157,6 +157,15 @@ void BLEConnectivityManager::ConnectionHandler(bt_conn *conn, uint8_t conn_err)
 	Instance().UpdateStateFlag(State::Connected, true);
 
 #if defined(CONFIG_BT_SMP)
+	if (!provider->IsInitiallyConnected()) {
+		const uint8_t id = bt_conn_get_id(conn);
+		const int unpairErr = bt_unpair(id, bt_conn_get_dst(conn));
+
+		if (unpairErr != 0 && unpairErr != -ENOENT) {
+			LOG_WRN("Failed to clear bond before pairing (err %d)", unpairErr);
+		}
+	}
+
 	err = bt_conn_set_security(conn, static_cast<bt_security_t>(CONFIG_BRIDGE_BT_MINIMUM_SECURITY_LEVEL));
 	VerifyOrExit(err == 0, securityFailed = true);
 
@@ -248,11 +257,36 @@ bool BLEConnectivityManager::ParamChangeRequestHandler(struct bt_conn *conn, str
 #if defined(CONFIG_BT_SMP)
 void BLEConnectivityManager::SecurityChangedHandler(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
 {
-	if (err) {
-		LOG_ERR("Security failed: level %d err %d", level, err);
-	} else {
+	if (!err) {
 		LOG_INF("Security changed: level %d", level);
+		return;
 	}
+
+	LOG_ERR("Security failed: level %d err %d", level, err);
+
+	BLEBridgedDeviceProvider *provider = Instance().FindBLEProvider(*bt_conn_get_dst(conn));
+	if (!provider) {
+		return;
+	}
+
+	if (!provider->IsInitiallyConnected() && err == BT_SECURITY_ERR_PIN_OR_KEY_MISSING &&
+	    !provider->SecurityRetryAttempted()) {
+		provider->MarkSecurityRetryAttempted();
+
+		const uint8_t id = bt_conn_get_id(conn);
+		bt_unpair(id, bt_conn_get_dst(conn));
+
+		const int secErr =
+			bt_conn_set_security(conn, static_cast<bt_security_t>(CONFIG_BRIDGE_BT_MINIMUM_SECURITY_LEVEL));
+		if (secErr == 0) {
+			return;
+		}
+
+		LOG_ERR("Security retry failed (%d)", secErr);
+	}
+
+	Instance().UpdateStateFlag(State::Pairing, false);
+	TEMPORARY_RETURN_IGNORED Instance().RemoveBLEProvider(*bt_conn_get_dst(conn));
 }
 
 void BLEConnectivityManager::AuthenticationCancel(struct bt_conn *conn)
@@ -748,8 +782,14 @@ CHIP_ERROR BLEConnectivityManager::Connect(BLEBridgedDeviceProvider *provider, C
 	mConnectionSecurityRequest.mCallback = request->mCallback;
 	mConnectionSecurityRequest.mContext = request->mContext;
 
+	provider->ResetSecurityRetryAttempted();
+
 	/* Pairing started, activate the Paring state */
 	Instance().UpdateStateFlag(State::Pairing, true);
+
+	if (request->mCallback) {
+		request->mCallback(request->mContext);
+	}
 #endif /* CONFIG_BT_SMP */
 
 	mRecovery.CancelTimer();
@@ -847,7 +887,8 @@ CHIP_ERROR BLEConnectivityManager::RemoveBLEProvider(bt_addr_le_t address)
 	}
 
 #ifdef CONFIG_BT_SMP
-	bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(provider->GetBLEBridgedDevice().mConn));
+	bt_unpair(bt_conn_get_id(provider->GetBLEBridgedDevice().mConn),
+		  bt_conn_get_dst(provider->GetBLEBridgedDevice().mConn));
 #endif
 	bt_conn_disconnect(provider->GetBLEBridgedDevice().mConn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 	bt_conn_unref(provider->GetBLEBridgedDevice().mConn);

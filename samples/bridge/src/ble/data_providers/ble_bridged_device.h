@@ -121,9 +121,14 @@ public:
 	 */
 	void NotifySuccessfulRecovery() { mFailedRecoveryAttempts = 0; }
 
+	void ResetSecurityRetryAttempted() { mSecurityRetryAttempted = false; }
+	bool SecurityRetryAttempted() const { return mSecurityRetryAttempted; }
+	void MarkSecurityRetryAttempted() { mSecurityRetryAttempted = true; }
+
 protected:
 	BLEBridgedDevice mDevice = { 0 };
 	uint16_t mFailedRecoveryAttempts = 0;
+	bool mSecurityRetryAttempted = false;
 };
 
 } /* namespace Nrf */

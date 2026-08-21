@@ -63,7 +63,10 @@ namespace Certification
 
 	void Init()
 	{
-		TEMPORARY_RETURN_IGNORED sIdentifyCluster.Init();
+		CHIP_ERROR err = sIdentifyCluster.Init();
+		if (err != CHIP_NO_ERROR) {
+			LOG_ERR("Identify cluster init failed: %" CHIP_ERROR_FORMAT, err.Format());
+		}
 	}
 
 	void ButtonHandler(ButtonState state, ButtonMask hasChanged)
